@@ -1,0 +1,99 @@
+name: Deploy to GitHub Pages
+
+# Build on every push to master and publish the built site to the `static`
+# branch. GitHub Pages (classic) is configured to serve that branch from `/`,
+# so a green run here is a live deploy — no Pages Actions environment involved.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Latest push wins: cancel an in-flight build so an older commit can never
+# force-push over a newer one.
+concurrency:
+  group: gh-pages-${{ github.repository }}
+  cancel-in-progress: true
+
+# contents: write is what lets GITHUB_TOKEN force-push the `static` branch.
+# Nothing else is needed — the site is served from a branch, not uploaded as a
+# Pages artifact.
+permissions:
+  contents: write
+
+env:
+  # URL path GitHub Pages serves this site from. Project sites live under
+  # /<repo>/ (https://<owner>.github.io/<repo>/), so that is the default.
+  # Set a BASE_PATH repository variable to "/" if you move the site to a custom
+  # domain or to an <owner>.github.io repo, where it is served from the root.
+  BASE_PATH: ${{ vars.BASE_PATH || format('/{0}/', github.event.repository.name) }}
+  # Optional: set a CNAME repository variable to your custom domain. The
+  # publish step is a force-push, which would otherwise wipe the CNAME file
+  # GitHub writes into the branch when you set a custom domain in Settings.
+  CNAME: ${{ vars.CNAME }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      # Generates .void/* codegen without booting Vite. `vp build` regenerates
+      # these too, but the project's CLAUDE.md asks for it after a CI install.
+      - run: bunx void prepare
+
+      # void.json sets output: "static", so this prerenders every page to HTML
+      # under dist/client/ alongside the client bundle.
+      - run: bun run build
+
+      - name: Rewrite absolute URLs onto the Pages base path
+        run: |
+          set -euo pipefail
+          BASE="${BASE_PATH%/}/"
+          if [ "$BASE" = "/" ]; then
+            echo "BASE_PATH is /, nothing to rewrite."
+            exit 0
+          fi
+          # Void emits root-absolute URLs (/assets/..., /_void/...) and has no
+          # Vite `base` support, so they are rewritten here for the subpath a
+          # project site is served from.
+          find dist/client -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' \) -print0 \
+            | xargs -0 -r sed -i \
+                -e "s|\"/assets/|\"${BASE}assets/|g" \
+                -e "s|'/assets/|'${BASE}assets/|g" \
+                -e "s|\`/assets/|\`${BASE}assets/|g" \
+                -e "s|\"/_void/|\"${BASE}_void/|g" \
+                -e "s|'/_void/|'${BASE}_void/|g" \
+                -e "s|\`/_void/|\`${BASE}_void/|g"
+          echo "Rewrote absolute URLs onto ${BASE}"
+
+      - name: Prepare the published tree
+        run: |
+          set -euo pipefail
+          # Without .nojekyll, Pages runs Jekyll and drops _void/ (and any other
+          # underscore-prefixed path) from the served site.
+          touch dist/client/.nojekyll
+          # Unknown paths fall back to the prerendered entry page so the client
+          # router can take over instead of showing GitHub's 404.
+          [ -f dist/client/index.html ] && cp dist/client/index.html dist/client/404.html
+          if [ -n "${CNAME}" ]; then
+            echo "${CNAME}" > dist/client/CNAME
+          fi
+          ls -la dist/client
+
+      - name: Publish to the static branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd dist/client
+          # A fresh single-commit orphan history each run: `static` holds build
+          # output only, so it is force-pushed rather than accumulating commits.
+          git init -q -b static
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Build ${GITHUB_SHA} from ${GITHUB_REF_NAME}"
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" static
