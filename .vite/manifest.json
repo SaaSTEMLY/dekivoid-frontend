@@ -1,0 +1,27 @@
+{
+  "_react-CYuo-Lgd.js": {
+    "file": "assets/react-CYuo-Lgd.js",
+    "name": "react"
+  },
+  "pages/index.tsx": {
+    "file": "assets/pages-DMc_cNH2.js",
+    "name": "pages",
+    "src": "pages/index.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_react-CYuo-Lgd.js"
+    ]
+  },
+  "virtual:void-pages-client": {
+    "file": "assets/pages-client-Uim55PHp.js",
+    "name": "pages-client",
+    "src": "virtual:void-pages-client",
+    "isEntry": true,
+    "imports": [
+      "_react-CYuo-Lgd.js"
+    ],
+    "dynamicImports": [
+      "pages/index.tsx"
+    ]
+  }
+}
